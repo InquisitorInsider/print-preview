@@ -40,6 +40,13 @@ _TICKET_CSS = """
   .ticket .tk-empty{color:#999;text-align:center}
   .meta{color:var(--muted);font-size:.75rem;display:flex;justify-content:space-between}
   .badge{background:#eef2ff;color:var(--accent);border-radius:999px;padding:1px 8px;font-size:.72rem}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-top:22px}
+  .card h2{margin:0 0 4px;font-size:1rem}
+  .card .hint{color:var(--muted);font-size:.8rem;margin:0 0 12px}
+  table.tbl{width:100%;border-collapse:collapse;font-size:.85rem}
+  table.tbl th,table.tbl td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+  .cform{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  .cform input{padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:.9rem}
 """
 
 _RENDER_JS = r"""
@@ -88,6 +95,18 @@ DASHBOARD = f"""<!doctype html>
     <button class="btn primary" onclick="addPrinter()">+ Agregar impresora virtual</button>
   </div>
   <div id="grid" class="grid"><div class="empty">Cargando…</div></div>
+
+  <div class="card">
+    <h2>Clientes / tokens</h2>
+    <p class="hint">Cada sistema que manda tickets acá (Ruta80G, horno-ruta80, etc.) puede usar su propio token (header <code>Authorization: Bearer &lt;token&gt;</code>). Si no defines ninguno, <code>POST /print</code> queda abierto en la red local.</p>
+    <table class="tbl" id="clientsTbl"><tr><th>Cliente</th><th>Token</th><th></th></tr></table>
+    <div class="cform">
+      <input id="clName" placeholder="Nombre del sistema (ej. ruta80g)">
+      <input id="clToken" placeholder="token">
+      <button class="btn" onclick="genToken()">Generar token</button>
+      <button class="btn primary" onclick="saveClient()">Guardar cliente</button>
+    </div>
+  </div>
 </div>
 <script>
 {_RENDER_JS}
@@ -113,6 +132,7 @@ function renderGrid(state){{
         <span class="pname">${{esc(p.name)}}</span>
         <div class="pactions">
           <a class="btn" href="/pantalla/${{encodeURIComponent(p.name)}}" target="_blank">Abrir pantalla ↗</a>
+          <button class="btn" onclick="testPrint('${{esc(p.name)}}')">Ticket de prueba</button>
           <button class="btn" onclick="clearPrinter('${{esc(p.name)}}')">Limpiar</button>
           <button class="btn danger" onclick="delPrinter('${{esc(p.name)}}')">Eliminar</button>
         </div>
@@ -143,9 +163,44 @@ async function clearPrinter(name){{
   await api('/api/printers/'+encodeURIComponent(name)+'/clear', {{method:'POST'}});
   refresh();
 }}
+async function testPrint(name){{
+  await api('/api/test', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify({{printer:name}})}});
+  refresh();
+}}
+
+// ---- clientes / tokens ----
+function genToken(){{
+  const a = new Uint8Array(24); crypto.getRandomValues(a);
+  document.getElementById('clToken').value = [...a].map(b=>b.toString(16).padStart(2,'0')).join('');
+}}
+async function loadClients(){{
+  const {{clients}} = await api('/api/clients');
+  const tbl = document.getElementById('clientsTbl');
+  let t = '<tr><th>Cliente</th><th>Token</th><th></th></tr>';
+  for(const c of clients){{
+    t += `<tr><td>${{esc(c.name)}}</td><td class="meta">${{c.token?'•••••• (guardado)':'(sin token)'}}</td>
+      <td><button class="btn danger" onclick="delClient('${{esc(c.name)}}')">Eliminar</button></td></tr>`;
+  }}
+  if(!clients.length) t += '<tr><td colspan="3" class="meta">Sin clientes: /print queda abierto en la red local.</td></tr>';
+  tbl.innerHTML = t;
+}}
+async function saveClient(){{
+  const name = document.getElementById('clName').value.trim();
+  const token = document.getElementById('clToken').value.trim();
+  if(!name) return;
+  await api('/api/clients', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify({{name, token}})}});
+  document.getElementById('clName').value = ''; document.getElementById('clToken').value = '';
+  loadClients();
+}}
+async function delClient(name){{
+  if(!confirm('¿Eliminar el cliente "'+name+'"?')) return;
+  await api('/api/clients/'+encodeURIComponent(name), {{method:'DELETE'}});
+  loadClients();
+}}
 
 document.getElementById('newName').addEventListener('keydown', e=>{{ if(e.key==='Enter') addPrinter(); }});
 refresh();
+loadClients();
 setInterval(refresh, 2000);
 </script>
 </body></html>"""

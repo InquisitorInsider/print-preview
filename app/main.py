@@ -10,20 +10,43 @@ agente real, sin cambiar una sola línea de código de negocio — pasar de
 
 En vez de imprimir, cada trabajo se guarda y se muestra en el tablero (/)
 o en la pantalla dedicada de esa impresora (/pantalla/<nombre>), tipo KDS.
+
+Dos capas de autenticación, igual que print-agent:
+1) Admin (tablero, pantallas, API de administración): HTTP Basic con
+   ADMIN_USER/ADMIN_PASSWORD. Si ADMIN_PASSWORD está vacía, no hay
+   protección.
+2) Clientes de impresión (POST /print): Bearer token. Si no hay clientes
+   configurados, el endpoint queda abierto en la red local.
 """
 from __future__ import annotations
 
+import secrets
 import uuid
 from datetime import datetime
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 
-from . import store, ui
+from . import clients, config, store, ui
 
-app = FastAPI(title="print-screen", version="1.0.0", docs_url="/docs")
+app = FastAPI(title="print-screen", version="1.1.0", docs_url="/docs")
+_basic = HTTPBasic(auto_error=False)
+
+
+def require_admin(creds: HTTPBasicCredentials | None = Depends(_basic)) -> None:
+    if not config.ADMIN_PASSWORD:
+        return
+    ok = (
+        creds is not None
+        and secrets.compare_digest(creds.username, config.ADMIN_USER)
+        and secrets.compare_digest(creds.password, config.ADMIN_PASSWORD)
+    )
+    if not ok:
+        raise HTTPException(status_code=401, detail="No autorizado",
+                            headers={"WWW-Authenticate": "Basic"})
 
 
 class PrintJob(BaseModel):
@@ -35,13 +58,25 @@ class PrintJob(BaseModel):
     model_config = {"extra": "ignore"}
 
 
+def _resolve_source(authorization: str | None, explicit: str | None) -> str:
+    token = None
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization[7:].strip()
+    if clients.has_clients():
+        name = clients.resolve(token)
+        if not name:
+            raise HTTPException(status_code=401, detail="Token inválido o ausente")
+        return name
+    return (explicit or "").strip() or "anónimo"
+
+
 # ---------- Mismo contrato público que print-agent ----------
 @app.post("/print", status_code=202)
-def print_endpoint(job: PrintJob) -> dict:
+def print_endpoint(job: PrintJob, authorization: str | None = Header(default=None)) -> dict:
     if not job.blocks and not job.raw:
         raise HTTPException(status_code=400, detail="Falta 'blocks' o 'raw'")
+    source = _resolve_source(authorization, job.source)
     printer_name = (job.printer or "").strip() or "(por defecto)"
-    source = (job.source or "").strip() or "anónimo"
     if job.blocks:
         blocks = job.blocks
     elif job.raw and "text" in job.raw:
@@ -66,30 +101,30 @@ def health() -> dict:
     return {"status": "ok", "printers": store.list_printers()}
 
 
-# ---------- Interfaz ----------
+# ---------- Interfaz (protegida) ----------
 @app.get("/", response_class=HTMLResponse)
-def dashboard() -> str:
+def dashboard(_: None = Depends(require_admin)) -> str:
     return ui.DASHBOARD
 
 
 @app.get("/pantalla/{name}", response_class=HTMLResponse)
-def pantalla(name: str) -> str:
+def pantalla(name: str, _: None = Depends(require_admin)) -> str:
     store.ensure_printer(name)
     return ui.pantalla_page(name)
 
 
 @app.get("/api/state")
-def api_state() -> dict:
+def api_state(_: None = Depends(require_admin)) -> dict:
     return store.snapshot()
 
 
 @app.get("/api/state/{name}")
-def api_state_one(name: str) -> dict:
+def api_state_one(name: str, _: None = Depends(require_admin)) -> dict:
     return {"name": name, "history": store.get_history(name)}
 
 
 @app.post("/api/printers")
-def api_add_printer(payload: dict) -> dict:
+def api_add_printer(payload: dict, _: None = Depends(require_admin)) -> dict:
     name = str((payload or {}).get("name", "")).strip()
     if not name:
         raise HTTPException(status_code=400, detail="Falta el nombre")
@@ -98,15 +133,66 @@ def api_add_printer(payload: dict) -> dict:
 
 
 @app.delete("/api/printers/{name}")
-def api_delete_printer(name: str) -> dict:
+def api_delete_printer(name: str, _: None = Depends(require_admin)) -> dict:
     store.remove_printer(name)
     return {"printers": store.list_printers()}
 
 
 @app.post("/api/printers/{name}/clear")
-def api_clear_history(name: str) -> dict:
+def api_clear_history(name: str, _: None = Depends(require_admin)) -> dict:
     store.clear_history(name)
     return {"ok": True}
+
+
+@app.post("/api/test")
+def api_test(payload: dict, _: None = Depends(require_admin)) -> dict:
+    name = str((payload or {}).get("printer", "")).strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Falta el nombre de la impresora")
+    store.record_ticket(name, _sample_blocks(name), 1, "prueba")
+    return {"ok": True}
+
+
+def _sample_blocks(printer_name: str) -> list:
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return [
+        {"type": "text", "text": "TICKET DE PRUEBA", "align": "center", "bold": True, "size": "double"},
+        {"type": "text", "text": "print-screen", "align": "center"},
+        {"type": "line", "char": "="},
+        {"type": "text", "text": f"Impresora: {printer_name}"},
+        {"type": "text", "text": f"Fecha:     {now}"},
+        {"type": "line"},
+        {"type": "row", "left": "2 x Articulo de ejemplo", "right": "20.00", "bold": True},
+        {"type": "row", "left": "1 x Otro articulo", "right": "5.50"},
+        {"type": "line"},
+        {"type": "row", "left": "TOTAL", "right": "25.50", "bold": True},
+        {"type": "text", "text": "Acentos: ñ á é í ó ú ¿? ¡!"},
+        {"type": "qr", "data": "https://print-screen.local/prueba", "size": 6},
+        {"type": "feed", "lines": 1},
+        {"type": "text", "text": "Configuracion correcta :)", "align": "center"},
+        {"type": "cut"},
+    ]
+
+
+# ---------- Clientes / tokens (protegido) ----------
+@app.get("/api/clients")
+def api_list_clients(_: None = Depends(require_admin)) -> dict:
+    return {"clients": clients.public()}
+
+
+@app.post("/api/clients")
+def api_save_client(payload: dict, _: None = Depends(require_admin)) -> dict:
+    try:
+        clients.save(str((payload or {}).get("name", "")), str((payload or {}).get("token", "")))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"clients": clients.public()}
+
+
+@app.delete("/api/clients/{name}")
+def api_delete_client(name: str, _: None = Depends(require_admin)) -> dict:
+    clients.delete(name)
+    return {"clients": clients.public()}
 
 
 @app.on_event("startup")
