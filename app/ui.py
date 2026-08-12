@@ -206,12 +206,13 @@ CONFIGURACION_PAGE = f"""<!doctype html>
   <div class="tabpanel" data-panel="usuarios" style="display:none">
     <div class="card" style="margin-top:0">
       <h2>Usuarios</h2>
-      <p class="hint"><b>admin</b>: entra a Configuración. <b>estándar</b>: solo ve pantallas de comandas y las acepta/completa.</p>
-      <table class="tbl" id="usersTbl"><tr><th>Usuario</th><th>Rol</th><th></th></tr></table>
+      <p class="hint"><b>admin</b>: entra a Configuración. <b>estándar</b>: solo ve pantallas de comandas y las acepta/completa — si le asignas una impresora, entra directo a esa pantalla y no puede ver las demás.</p>
+      <table class="tbl" id="usersTbl"><tr><th>Usuario</th><th>Rol</th><th>Impresora asignada</th><th></th></tr></table>
       <div class="cform">
         <input id="usName" placeholder="usuario">
         <input id="usPass" type="password" placeholder="contraseña">
-        <select id="usRol"><option value="estandar">estándar</option><option value="admin">admin</option></select>
+        <select id="usRol" onchange="onRolChange()"><option value="estandar">estándar</option><option value="admin">admin</option></select>
+        <select id="usImpresora"><option value="">(todas — sin restringir)</option></select>
         <button class="btn primary" onclick="saveUser()">Crear usuario</button>
       </div>
     </div>
@@ -251,7 +252,23 @@ function renderGrid(state){{
     </div>`;
   }}).join('');
 }}
-async function refresh(){{ try{{ renderGrid(await api('/api/state')); }}catch(e){{}} }}
+let PRINTER_NAMES = [];
+function populateImpresoraSelect(){{
+  const sel = document.getElementById('usImpresora');
+  if(!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">(todas — sin restringir)</option>' +
+    PRINTER_NAMES.map(n=>`<option value="${{esc(n)}}">${{esc(n)}}</option>`).join('');
+  sel.value = cur;
+}}
+async function refresh(){{
+  try{{
+    const state = await api('/api/state');
+    renderGrid(state);
+    PRINTER_NAMES = state.printers.map(p=>p.name);
+    populateImpresoraSelect();
+  }}catch(e){{}}
+}}
 async function addPrinter(){{
   const name = document.getElementById('newName').value.trim();
   if(!name) return;
@@ -304,12 +321,19 @@ async function delClient(name){{
 }}
 
 // ---- usuarios ----
+function onRolChange(){{
+  const isAdmin = document.getElementById('usRol').value === 'admin';
+  const sel = document.getElementById('usImpresora');
+  sel.disabled = isAdmin;
+  if(isAdmin) sel.value = '';
+}}
 async function loadUsers(){{
   const {{users}} = await api('/api/users');
   const tbl = document.getElementById('usersTbl');
-  let t = '<tr><th>Usuario</th><th>Rol</th><th></th></tr>';
+  let t = '<tr><th>Usuario</th><th>Rol</th><th>Impresora asignada</th><th></th></tr>';
   for(const u of users){{
     t += `<tr><td>${{esc(u.username)}}</td><td><span class="tag ${{u.rol==='estandar'?'estandar':''}}">${{esc(u.rol)}}</span></td>
+      <td class="meta">${{u.rol==='admin' ? '—' : (u.impresora ? esc(u.impresora) : '(todas)')}}</td>
       <td><button class="btn danger" onclick="delUser('${{u.id}}','${{esc(u.username)}}')">Eliminar</button></td></tr>`;
   }}
   tbl.innerHTML = t;
@@ -318,9 +342,10 @@ async function saveUser(){{
   const username = document.getElementById('usName').value.trim();
   const password = document.getElementById('usPass').value;
   const rol = document.getElementById('usRol').value;
+  const impresora = document.getElementById('usImpresora').value || null;
   if(!username || !password) return;
   try{{
-    await api('/api/users', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify({{username, password, rol}})}});
+    await api('/api/users', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify({{username, password, rol, impresora}})}});
     document.getElementById('usName').value=''; document.getElementById('usPass').value='';
     loadUsers();
   }}catch(e){{ alert(e.message); }}
@@ -337,9 +362,10 @@ setInterval(refresh, 2000);
 </body></html>"""
 
 
-def pantalla_page(name: str) -> str:
+def pantalla_page(name: str, show_volver: bool = True) -> str:
     safe_title = (name or "").replace("<", "").replace(">", "")
     name_json = json.dumps(name)
+    volver_link = '<a href="/">← pantallas</a>' if show_volver else ''
     return f"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -370,7 +396,7 @@ def pantalla_page(name: str) -> str:
 <header>
   <h1>🖨️ {safe_title}</h1>
   <span class="sub"><span class="dot"></span>en vivo</span>
-  <a href="/">← pantallas</a>
+  {volver_link}
 </header>
 <div class="feed" id="feed"><div class="empty">Esperando el primer ticket…</div></div>
 <script>

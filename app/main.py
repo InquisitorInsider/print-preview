@@ -130,6 +130,15 @@ def api_setup(payload: dict) -> dict:
     return {"ok": True}
 
 
+def _check_pantalla_access(user: dict, name: str) -> None:
+    """Un estándar ASIGNADO a una impresora solo puede ver/operar esa — ni
+    por la interfaz ni llamando la API directo. Sin asignación (o admin),
+    puede ver todas."""
+    asignada = user.get("impresora")
+    if user["rol"] != "admin" and asignada and asignada != name:
+        raise HTTPException(status_code=403, detail=f"Tu usuario solo tiene acceso a la pantalla '{asignada}'")
+
+
 # ---------- Área operativa: cualquier usuario autenticado ----------
 @app.get("/", response_class=HTMLResponse)
 def home(creds: HTTPBasicCredentials | None = Depends(_basic)):
@@ -139,27 +148,32 @@ def home(creds: HTTPBasicCredentials | None = Depends(_basic)):
     if not user:
         raise HTTPException(status_code=401, detail="No autorizado",
                             headers={"WWW-Authenticate": "Basic"})
+    if user["rol"] != "admin" and user.get("impresora"):
+        return RedirectResponse(f"/pantalla/{user['impresora']}")
     return ui.home_page(store.list_printers(), is_admin=(user["rol"] == "admin"))
 
 
 @app.get("/pantalla/{name}", response_class=HTMLResponse)
-def pantalla(name: str, _: dict = Depends(require_user)) -> str:
+def pantalla(name: str, user: dict = Depends(require_user)) -> str:
+    _check_pantalla_access(user, name)
     store.ensure_printer(name)
-    return ui.pantalla_page(name)
+    return ui.pantalla_page(name, show_volver=not (user["rol"] != "admin" and user.get("impresora")))
 
 
 @app.get("/api/state")
-def api_state(_: dict = Depends(require_user)) -> dict:
+def api_state(_: dict = Depends(require_admin)) -> dict:
     return store.snapshot()
 
 
 @app.get("/api/state/{name}")
-def api_state_one(name: str, _: dict = Depends(require_user)) -> dict:
+def api_state_one(name: str, user: dict = Depends(require_user)) -> dict:
+    _check_pantalla_access(user, name)
     return {"name": name, "history": store.get_history(name)}
 
 
 @app.post("/api/tickets/{name}/{ticket_id}/estado")
-def api_set_estado(name: str, ticket_id: str, payload: dict, _: dict = Depends(require_user)) -> dict:
+def api_set_estado(name: str, ticket_id: str, payload: dict, user: dict = Depends(require_user)) -> dict:
+    _check_pantalla_access(user, name)
     estado = str((payload or {}).get("estado", ""))
     try:
         ok = store.set_estado(name, ticket_id, estado)
@@ -262,6 +276,7 @@ def api_create_user(payload: dict, _: dict = Depends(require_admin)) -> dict:
             str((payload or {}).get("password", "")),
             rol=str((payload or {}).get("rol", "estandar")),
             nombre=str((payload or {}).get("nombre", "")),
+            impresora=(payload or {}).get("impresora") or None,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

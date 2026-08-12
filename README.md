@@ -47,6 +47,10 @@ Tres capas:
    - **admin**: Configuración completa + pantallas de comandas.
    - **estándar**: solo entra a las pantallas de comandas, a
      verlas y aceptarlas/completarlas — sin acceso a Configuración.
+     Opcionalmente se le asigna UNA impresora (ej. Pamela → "Brasa"): entra
+     directo a esa pantalla y no puede ver ni operar las demás (ni por la
+     interfaz ni llamando la API directo — 403). Sin asignación, ve el
+     listado completo de pantallas.
    Contraseñas con hash PBKDF2 en `./data/users.json` (mismo esquema que
    horno-ruta80/Ruta80G). No se puede eliminar al único administrador que
    quede.

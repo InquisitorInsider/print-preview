@@ -3,7 +3,10 @@
 - **admin**: acceso a Configuración (impresoras, clientes/tokens,
   usuarios) además de las pantallas de comandas.
 - **estandar**: solo entra a ver las pantallas de comandas y
-  aceptarlas/completarlas — sin acceso a Configuración.
+  aceptarlas/completarlas — sin acceso a Configuración. Opcionalmente
+  queda ASIGNADO a una sola impresora (ej. "Pamela" -> "Brasa"): entra
+  directo a esa pantalla y no puede ver ni operar las demás. Sin
+  asignación, ve el listado completo de pantallas (comportamiento previo).
 
 Alta manual (la crea un admin desde Configuración → Usuarios), salvo el
 primero, que se crea en /setup en el primer arranque (siempre como admin).
@@ -71,7 +74,8 @@ def exists_any() -> bool:
 
 
 def _public(u: dict) -> dict:
-    return {"id": u["id"], "username": u["username"], "rol": u["rol"], "nombre": u.get("nombre", "")}
+    return {"id": u["id"], "username": u["username"], "rol": u["rol"],
+            "nombre": u.get("nombre", ""), "impresora": u.get("impresora") or None}
 
 
 def list_users() -> list[dict]:
@@ -79,7 +83,8 @@ def list_users() -> list[dict]:
         return [_public(u) for u in _users]
 
 
-def create(username: str, password: str, rol: str = "estandar", nombre: str = "") -> dict:
+def create(username: str, password: str, rol: str = "estandar", nombre: str = "",
+          impresora: str | None = None) -> dict:
     username = (username or "").strip().lower()
     if not username:
         raise ValueError("El usuario es obligatorio.")
@@ -87,6 +92,11 @@ def create(username: str, password: str, rol: str = "estandar", nombre: str = ""
         raise ValueError("La contraseña debe tener al menos 6 caracteres.")
     if rol not in ROLES:
         raise ValueError("Rol inválido.")
+    # Solo tiene sentido restringir a una impresora a un usuario estándar —
+    # un admin siempre ve/opera todas.
+    impresora = (impresora or "").strip() or None
+    if rol == "admin":
+        impresora = None
     with _lock:
         if any(u["username"] == username for u in _users):
             raise ValueError("Ese usuario ya existe.")
@@ -96,6 +106,7 @@ def create(username: str, password: str, rol: str = "estandar", nombre: str = ""
             "password_hash": _hash(password),
             "rol": rol,
             "nombre": nombre or username,
+            "impresora": impresora,
         }
         _users.append(user)
         _persist()
