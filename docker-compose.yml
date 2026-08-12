@@ -1,0 +1,15 @@
+# print-screen: "impresora virtual" para pruebas. Se levanta en la PC que
+# tiene pantalla (NO en la Raspberry Pi donde corre print-agent — esa no
+# tiene monitor). Expone el mismo contrato HTTP que print-agent
+# (POST /print, GET /printers, GET /health): para probar, cambia el
+# `print_agent_url` del sistema que quieras probar (Ruta80G, horno-ruta80,
+# etc.) para que apunte acá en vez de al agente real — sin tocar código.
+services:
+  print-screen:
+    build: .
+    container_name: print-screen
+    restart: unless-stopped
+    ports:
+      - "8120:8120"
+    volumes:
+      - ./data:/app/data
