@@ -41,6 +41,7 @@ _TICKET_CSS = """
   .ticket .tk-drawer{text-align:center;color:#a15c00;margin:4px 0}
   .ticket .tk-empty{color:#999;text-align:center}
   .meta{color:var(--muted);font-size:.75rem;display:flex;justify-content:space-between}
+  td.muted-cell{color:var(--muted)}
   .badge{background:#eef2ff;color:var(--accent);border-radius:999px;padding:1px 8px;font-size:.72rem}
   .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-top:22px}
   .card h2{margin:0 0 4px;font-size:1rem}
@@ -300,10 +301,10 @@ async function loadClients(){{
   const tbl = document.getElementById('clientsTbl');
   let t = '<tr><th>Cliente</th><th>Token</th><th></th></tr>';
   for(const c of clients){{
-    t += `<tr><td>${{esc(c.name)}}</td><td class="meta">${{c.token?'•••••• (guardado)':'(sin token)'}}</td>
+    t += `<tr><td>${{esc(c.name)}}</td><td class="muted-cell">${{c.token?'•••••• (guardado)':'(sin token)'}}</td>
       <td><button class="btn danger" onclick="delClient('${{esc(c.name)}}')">Eliminar</button></td></tr>`;
   }}
-  if(!clients.length) t += '<tr><td colspan="3" class="meta">Sin clientes: /print queda abierto en la red local.</td></tr>';
+  if(!clients.length) t += '<tr><td colspan="3" class="muted-cell">Sin clientes: /print queda abierto en la red local.</td></tr>';
   tbl.innerHTML = t;
 }}
 async function saveClient(){{
@@ -333,7 +334,7 @@ async function loadUsers(){{
   let t = '<tr><th>Usuario</th><th>Rol</th><th>Impresora asignada</th><th></th></tr>';
   for(const u of users){{
     t += `<tr><td>${{esc(u.username)}}</td><td><span class="tag ${{u.rol==='estandar'?'estandar':''}}">${{esc(u.rol)}}</span></td>
-      <td class="meta">${{u.rol==='admin' ? '—' : (u.impresora ? esc(u.impresora) : '(todas)')}}</td>
+      <td class="muted-cell">${{u.rol==='admin' ? '—' : (u.impresora ? esc(u.impresora) : '(todas)')}}</td>
       <td><button class="btn danger" onclick="delUser('${{u.id}}','${{esc(u.username)}}')">Eliminar</button></td></tr>`;
   }}
   tbl.innerHTML = t;
