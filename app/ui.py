@@ -1,6 +1,7 @@
 """Interfaz web, autocontenida (mismo patrón que print-agent/app/ui.py):
-un tablero general y una pantalla dedicada por impresora, sin dependencias
-externas de frontend."""
+una página operativa (lista de pantallas + la pantalla de cada impresora,
+para cualquier usuario) y una página de Configuración aparte (solo admin),
+sin dependencias externas de frontend."""
 from __future__ import annotations
 
 import json
@@ -13,16 +14,17 @@ _TICKET_CSS = """
   header h1{font-size:1.1rem;margin:0}
   header .sub{color:var(--muted);font-size:.85rem}
   header a{color:var(--accent);text-decoration:none;font-size:.85rem}
+  header a.cta{margin-left:auto;border:1px solid var(--line);padding:6px 12px;border-radius:8px}
   .wrap{padding:20px;max-width:1200px;margin:0 auto}
   .addbar{display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap}
   .addbar input{padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:.9rem;min-width:220px}
   .addbar button, .btn{padding:8px 14px;border:1px solid var(--line);background:var(--card);border-radius:8px;cursor:pointer;font-size:.85rem}
   .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
   .btn.danger{color:var(--err);border-color:#f3c2c2}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
-  .pcard{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:8px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px}
+  .pcard{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px}
   .pcard .phead{display:flex;justify-content:space-between;align-items:center}
-  .pcard .pname{font-weight:600}
+  .pcard .pname{font-weight:600;font-size:1.02rem}
   .pcard .pactions{display:flex;gap:6px;flex-wrap:wrap}
   .pcard .pactions .btn{padding:5px 9px;font-size:.78rem}
   .empty{color:var(--muted);font-size:.85rem;padding:30px;text-align:center}
@@ -45,8 +47,13 @@ _TICKET_CSS = """
   .card .hint{color:var(--muted);font-size:.8rem;margin:0 0 12px}
   table.tbl{width:100%;border-collapse:collapse;font-size:.85rem}
   table.tbl th,table.tbl td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
-  .cform{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
-  .cform input{padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:.9rem}
+  .cform{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center}
+  .cform input,.cform select{padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:.9rem}
+  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:18px}
+  .tabbtn{padding:10px 16px;border:none;background:transparent;cursor:pointer;font-size:.88rem;color:var(--muted);border-bottom:2px solid transparent}
+  .tabbtn.active{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+  .tag{font-size:.68rem;padding:1px 7px;border-radius:999px;background:#eef2ff;color:var(--accent);margin-left:6px}
+  .tag.estandar{background:#f1f5f9;color:#475569}
 """
 
 _RENDER_JS = r"""
@@ -77,6 +84,11 @@ function renderBlocks(blocks){
   }
   return html || '<div class="tk-empty">(ticket vacío)</div>';
 }
+
+function showTab(name){
+  document.querySelectorAll('.tabbtn').forEach(b=>b.classList.toggle('active', b.dataset.tab===name));
+  document.querySelectorAll('.tabpanel').forEach(p=>p.style.display = p.dataset.panel===name ? '' : 'none');
+}
 """
 
 SETUP_PAGE = f"""<!doctype html>
@@ -96,7 +108,9 @@ SETUP_PAGE = f"""<!doctype html>
 </head><body>
 <div class="setup">
   <h1>🖨️ print-screen — primer arranque</h1>
-  <p>Crea el usuario administrador del tablero. Se pide una sola vez.</p>
+  <p>Crea el usuario administrador. Se pide una sola vez — desde
+  Configuración → Usuarios podrás agregar usuarios estándar (solo ven
+  comandas y las aceptan/completan).</p>
   <label>Usuario</label><input id="su" value="admin">
   <label>Contraseña</label><input id="sp" type="password">
   <label>Confirmar contraseña</label><input id="sp2" type="password">
@@ -119,7 +133,20 @@ document.getElementById('sp2').addEventListener('keydown', e=>{{ if(e.key==='Ent
 </script>
 </body></html>"""
 
-DASHBOARD = f"""<!doctype html>
+
+def home_page(printer_names: list[str], is_admin: bool) -> str:
+    cfg_link = '<a class="cta" href="/configuracion">⚙ Configuración</a>' if is_admin else ""
+    cards = "".join(
+        f'<div class="pcard"><div class="phead"><span class="pname">{n}</span></div>'
+        f'<a class="btn primary" href="/pantalla/{n}">Abrir pantalla ↗</a></div>'
+        for n in printer_names
+    )
+    if not printer_names:
+        msg = ("Sin impresoras virtuales todavía. Ve a Configuración → Impresoras para crear una."
+               if is_admin else
+               "Sin impresoras virtuales todavía. Pide a un administrador que cree una desde Configuración.")
+        cards = f'<div class="empty">{msg}</div>'
+    return f"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>print-screen</title>
@@ -127,24 +154,66 @@ DASHBOARD = f"""<!doctype html>
 </head><body>
 <header>
   <h1>🖨️ print-screen</h1>
-  <span class="sub">Impresoras virtuales — vista previa de tickets, sin gastar papel</span>
+  <span class="sub">Pantallas de comandas — elige una para ver sus tickets</span>
+  {cfg_link}
 </header>
 <div class="wrap">
-  <div class="addbar">
-    <input id="newName" placeholder="Nombre de la impresora (ej. Barra, Caja, Brasa)">
-    <button class="btn primary" onclick="addPrinter()">+ Agregar impresora virtual</button>
-  </div>
-  <div id="grid" class="grid"><div class="empty">Cargando…</div></div>
+  <div class="grid">{cards}</div>
+</div>
+</body></html>"""
 
-  <div class="card">
-    <h2>Clientes / tokens</h2>
-    <p class="hint">Cada sistema que manda tickets acá (Ruta80G, horno-ruta80, etc.) puede usar su propio token (header <code>Authorization: Bearer &lt;token&gt;</code>). Si no defines ninguno, <code>POST /print</code> queda abierto en la red local.</p>
-    <table class="tbl" id="clientsTbl"><tr><th>Cliente</th><th>Token</th><th></th></tr></table>
-    <div class="cform">
-      <input id="clName" placeholder="Nombre del sistema (ej. ruta80g)">
-      <input id="clToken" placeholder="token">
-      <button class="btn" onclick="genToken()">Generar token</button>
-      <button class="btn primary" onclick="saveClient()">Guardar cliente</button>
+
+CONFIGURACION_PAGE = f"""<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Configuración — print-screen</title>
+<style>{_TICKET_CSS}</style>
+</head><body>
+<header>
+  <h1>⚙ Configuración</h1>
+  <span class="sub">print-screen</span>
+  <a class="cta" href="/">← volver</a>
+</header>
+<div class="wrap">
+  <div class="tabs">
+    <button class="tabbtn active" data-tab="impresoras" onclick="showTab('impresoras')">Impresoras</button>
+    <button class="tabbtn" data-tab="clientes" onclick="showTab('clientes')">Clientes y tokens</button>
+    <button class="tabbtn" data-tab="usuarios" onclick="showTab('usuarios')">Usuarios</button>
+  </div>
+
+  <div class="tabpanel" data-panel="impresoras">
+    <div class="addbar">
+      <input id="newName" placeholder="Nombre de la impresora (ej. Barra, Caja, Brasa)">
+      <button class="btn primary" onclick="addPrinter()">+ Agregar impresora virtual</button>
+    </div>
+    <div id="grid" class="grid"><div class="empty">Cargando…</div></div>
+  </div>
+
+  <div class="tabpanel" data-panel="clientes" style="display:none">
+    <div class="card" style="margin-top:0">
+      <h2>Clientes / tokens</h2>
+      <p class="hint">Cada sistema que manda tickets acá (Ruta80G, horno-ruta80, etc.) puede usar su propio token (header <code>Authorization: Bearer &lt;token&gt;</code>). Si no defines ninguno, <code>POST /print</code> queda abierto en la red local.</p>
+      <table class="tbl" id="clientsTbl"><tr><th>Cliente</th><th>Token</th><th></th></tr></table>
+      <div class="cform">
+        <input id="clName" placeholder="Nombre del sistema (ej. ruta80g)">
+        <input id="clToken" placeholder="token">
+        <button class="btn" onclick="genToken()">Generar token</button>
+        <button class="btn primary" onclick="saveClient()">Guardar cliente</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="tabpanel" data-panel="usuarios" style="display:none">
+    <div class="card" style="margin-top:0">
+      <h2>Usuarios</h2>
+      <p class="hint"><b>admin</b>: entra a Configuración. <b>estándar</b>: solo ve pantallas de comandas y las acepta/completa.</p>
+      <table class="tbl" id="usersTbl"><tr><th>Usuario</th><th>Rol</th><th></th></tr></table>
+      <div class="cform">
+        <input id="usName" placeholder="usuario">
+        <input id="usPass" type="password" placeholder="contraseña">
+        <select id="usRol"><option value="estandar">estándar</option><option value="admin">admin</option></select>
+        <button class="btn primary" onclick="saveUser()">Crear usuario</button>
+      </div>
     </div>
   </div>
 </div>
@@ -153,12 +222,12 @@ DASHBOARD = f"""<!doctype html>
 
 async function api(path, opts){{
   const r = await fetch(path, opts);
-  if(!r.ok) throw new Error(await r.text());
+  if(!r.ok) throw new Error((await r.json().catch(()=>({{detail:'Error'}}))).detail || 'Error');
   return r.json();
 }}
 
+// ---- impresoras ----
 function fmtAt(h){{ return h && h[0] ? h[0].at : 'sin tickets todavía'; }}
-
 function renderGrid(state){{
   const grid = document.getElementById('grid');
   if(!state.printers.length){{
@@ -182,11 +251,7 @@ function renderGrid(state){{
     </div>`;
   }}).join('');
 }}
-
-async function refresh(){{
-  try{{ renderGrid(await api('/api/state')); }}catch(e){{ /* red caída, se reintenta solo */ }}
-}}
-
+async function refresh(){{ try{{ renderGrid(await api('/api/state')); }}catch(e){{}} }}
 async function addPrinter(){{
   const name = document.getElementById('newName').value.trim();
   if(!name) return;
@@ -238,9 +303,35 @@ async function delClient(name){{
   loadClients();
 }}
 
+// ---- usuarios ----
+async function loadUsers(){{
+  const {{users}} = await api('/api/users');
+  const tbl = document.getElementById('usersTbl');
+  let t = '<tr><th>Usuario</th><th>Rol</th><th></th></tr>';
+  for(const u of users){{
+    t += `<tr><td>${{esc(u.username)}}</td><td><span class="tag ${{u.rol==='estandar'?'estandar':''}}">${{esc(u.rol)}}</span></td>
+      <td><button class="btn danger" onclick="delUser('${{u.id}}','${{esc(u.username)}}')">Eliminar</button></td></tr>`;
+  }}
+  tbl.innerHTML = t;
+}}
+async function saveUser(){{
+  const username = document.getElementById('usName').value.trim();
+  const password = document.getElementById('usPass').value;
+  const rol = document.getElementById('usRol').value;
+  if(!username || !password) return;
+  try{{
+    await api('/api/users', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify({{username, password, rol}})}});
+    document.getElementById('usName').value=''; document.getElementById('usPass').value='';
+    loadUsers();
+  }}catch(e){{ alert(e.message); }}
+}}
+async function delUser(id, name){{
+  if(!confirm('¿Eliminar el usuario "'+name+'"?')) return;
+  try{{ await api('/api/users/'+id, {{method:'DELETE'}}); loadUsers(); }}catch(e){{ alert(e.message); }}
+}}
+
 document.getElementById('newName').addEventListener('keydown', e=>{{ if(e.key==='Enter') addPrinter(); }});
-refresh();
-loadClients();
+refresh(); loadClients(); loadUsers();
 setInterval(refresh, 2000);
 </script>
 </body></html>"""
@@ -259,7 +350,19 @@ def pantalla_page(name: str) -> str:
   header{{position:sticky;top:0;z-index:2}}
   .feed{{max-width:520px;margin:0 auto;padding:18px;display:flex;flex-direction:column;gap:16px}}
   .ticket{{font-size:1rem;box-shadow:0 2px 10px rgba(0,0,0,.08)}}
-  .tkwrap .meta{{margin-bottom:4px}}
+  .tkwrap{{border-left:5px solid #d1d5db;padding-left:12px;border-radius:4px}}
+  .tkwrap.pendiente{{border-left-color:#f59e0b}}
+  .tkwrap.aceptado{{border-left-color:#2563eb}}
+  .tkwrap.completado{{border-left-color:#22c55e;opacity:.55}}
+  .tkwrap .meta{{margin-bottom:4px;align-items:center}}
+  .estado-badge{{font-size:.68rem;padding:2px 9px;border-radius:999px;text-transform:uppercase;letter-spacing:.03em;font-weight:600}}
+  .estado-badge.pendiente{{background:#fef3c7;color:#92400e}}
+  .estado-badge.aceptado{{background:#dbeafe;color:#1e40af}}
+  .estado-badge.completado{{background:#dcfce7;color:#166534}}
+  .tkactions{{margin-top:8px;display:flex;gap:8px}}
+  .tkactions button{{padding:9px 18px;border:none;border-radius:8px;font-size:.85rem;cursor:pointer;font-weight:600}}
+  .tkactions .accept{{background:#f59e0b;color:#fff}}
+  .tkactions .complete{{background:#2563eb;color:#fff}}
   .dot{{width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block;margin-right:6px;animation:pulse 1.6s infinite}}
   @keyframes pulse{{0%,100%{{opacity:1}}50%{{opacity:.3}}}}
 </style>
@@ -267,13 +370,26 @@ def pantalla_page(name: str) -> str:
 <header>
   <h1>🖨️ {safe_title}</h1>
   <span class="sub"><span class="dot"></span>en vivo</span>
-  <a href="/">← tablero</a>
+  <a href="/">← pantallas</a>
 </header>
 <div class="feed" id="feed"><div class="empty">Esperando el primer ticket…</div></div>
 <script>
 {_RENDER_JS}
 function esc2(s){{ return esc(s); }}
 const PRINTER = {name_json};
+
+async function setEstado(id, estado){{
+  await fetch('/api/tickets/'+encodeURIComponent(PRINTER)+'/'+id+'/estado', {{
+    method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify({{estado}})
+  }});
+  refresh();
+}}
+
+function accionesHtml(h){{
+  if(h.estado==='pendiente') return `<div class="tkactions"><button class="accept" onclick="setEstado('${{h.id}}','aceptado')">Aceptar</button></div>`;
+  if(h.estado==='aceptado') return `<div class="tkactions"><button class="complete" onclick="setEstado('${{h.id}}','completado')">Completar</button></div>`;
+  return '';
+}}
 
 async function refresh(){{
   try{{
@@ -282,9 +398,10 @@ async function refresh(){{
     const feed = document.getElementById('feed');
     if(!data.history.length){{ feed.innerHTML = '<div class="empty">Esperando el primer ticket…</div>'; return; }}
     feed.innerHTML = data.history.map(h => `
-      <div class="tkwrap">
-        <div class="meta"><span>${{esc2(h.at)}}</span><span>${{h.copies>1?('x'+h.copies+' · '):''}}${{esc2(h.source||'')}}</span></div>
+      <div class="tkwrap ${{h.estado}}">
+        <div class="meta"><span><span class="estado-badge ${{h.estado}}">${{h.estado}}</span> ${{esc2(h.at)}}</span><span>${{h.copies>1?('x'+h.copies+' · '):''}}${{esc2(h.source||'')}}</span></div>
         <div class="ticket">${{renderBlocks(h.blocks)}}</div>
+        ${{accionesHtml(h)}}
       </div>`).join('');
   }}catch(e){{ /* red caída, se reintenta solo */ }}
 }}

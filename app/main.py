@@ -8,16 +8,18 @@ caja-ruta80, etc.) pueda apuntar su `print_agent_url` acá en vez de al
 agente real, sin cambiar una sola línea de código de negocio — pasar de
 "impresora física" a "impresora virtual" es solo cambiar esa URL.
 
-En vez de imprimir, cada trabajo se guarda y se muestra en el tablero (/)
-o en la pantalla dedicada de esa impresora (/pantalla/<nombre>), tipo KDS.
+En vez de imprimir, cada trabajo se guarda y se muestra en la pantalla
+dedicada de esa impresora (/pantalla/<nombre>), tipo KDS, donde se puede
+aceptar/completar cada comanda.
 
-Dos capas de autenticación:
-1) Admin (tablero, pantallas, API de administración): HTTP Basic contra un
-   usuario/contraseña que TÚ eliges en el primer arranque (ver /setup) —
-   mismo patrón de "primer arranque crea el admin" que horno-ruta80 /
-   Ruta80G, no una contraseña generada al azar.
-2) Clientes de impresión (POST /print): Bearer token. Si no hay clientes
-   configurados, el endpoint queda abierto en la red local.
+Tres capas de autenticación:
+1) Usuarios (HTTP Basic, dos roles — ver app/users.py):
+   - **admin**: Configuración (impresoras, clientes/tokens, usuarios) +
+     pantallas de comandas.
+   - **estandar**: solo pantallas de comandas (ver/aceptar/completar).
+   El primer usuario se crea en /setup (primer arranque), siempre admin.
+2) Clientes de impresión (POST /print): Bearer token por sistema. Si no
+   hay clientes configurados, el endpoint queda abierto en la red local.
 """
 from __future__ import annotations
 
@@ -30,24 +32,32 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 
-from . import admin, clients, store, ui
+from . import clients, store, ui, users
 
-app = FastAPI(title="print-screen", version="1.2.0", docs_url="/docs")
+app = FastAPI(title="print-screen", version="2.0.0", docs_url="/docs")
 _basic = HTTPBasic(auto_error=False)
 
 
-def _check_basic(creds: HTTPBasicCredentials | None) -> None:
-    ok = creds is not None and admin.verify(creds.username, creds.password)
-    if not ok:
+def _authenticate(creds: HTTPBasicCredentials | None) -> dict | None:
+    if creds is None:
+        return None
+    return users.authenticate(creds.username, creds.password)
+
+
+def require_user(creds: HTTPBasicCredentials | None = Depends(_basic)) -> dict:
+    if not users.exists_any():
+        raise HTTPException(status_code=401, detail="Todavía no hay usuarios — entra a /setup")
+    user = _authenticate(creds)
+    if not user:
         raise HTTPException(status_code=401, detail="No autorizado",
                             headers={"WWW-Authenticate": "Basic"})
+    return user
 
 
-def require_admin(creds: HTTPBasicCredentials | None = Depends(_basic)) -> None:
-    if not admin.exists():
-        raise HTTPException(status_code=401,
-                            detail="Todavía no hay administrador configurado — entra a /setup")
-    _check_basic(creds)
+def require_admin(user: dict = Depends(require_user)) -> dict:
+    if user["rol"] != "admin":
+        raise HTTPException(status_code=403, detail="Se requiere rol administrador")
+    return user
 
 
 class PrintJob(BaseModel):
@@ -71,7 +81,7 @@ def _resolve_source(authorization: str | None, explicit: str | None) -> str:
     return (explicit or "").strip() or "anónimo"
 
 
-# ---------- Mismo contrato público que print-agent ----------
+# ---------- Mismo contrato público que print-agent (sin cambios) ----------
 @app.post("/print", status_code=202)
 def print_endpoint(job: PrintJob, authorization: str | None = Header(default=None)) -> dict:
     if not job.blocks and not job.raw:
@@ -83,8 +93,6 @@ def print_endpoint(job: PrintJob, authorization: str | None = Header(default=Non
     elif job.raw and "text" in job.raw:
         blocks = [{"type": "text", "text": job.raw["text"]}]
     else:
-        # raw.escpos_base64: nadie en este proyecto lo usa hoy (todos mandan
-        # `blocks`) — se avisa en vez de intentar decodificar ESC/POS.
         blocks = [{"type": "text", "text": "[contenido binario ESC/POS crudo — sin vista previa]"}]
     store.record_ticket(printer_name, blocks, job.copies or 1, source)
     job_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
@@ -102,55 +110,74 @@ def health() -> dict:
     return {"status": "ok", "printers": store.list_printers()}
 
 
-# ---------- Primer arranque: crear administrador ----------
+# ---------- Primer arranque: crear el primer usuario (admin) ----------
 @app.get("/setup", response_class=HTMLResponse)
 def setup_page():
-    if admin.exists():
+    if users.exists_any():
         return RedirectResponse("/")
     return ui.SETUP_PAGE
 
 
 @app.post("/api/setup")
 def api_setup(payload: dict) -> dict:
-    if admin.exists():
-        raise HTTPException(status_code=409, detail="Ya existe un administrador.")
+    if users.exists_any():
+        raise HTTPException(status_code=409, detail="Ya existe al menos un usuario.")
     try:
-        admin.create(str((payload or {}).get("username", "")), str((payload or {}).get("password", "")))
+        users.create(str((payload or {}).get("username", "")),
+                    str((payload or {}).get("password", "")), rol="admin")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"ok": True}
 
 
-# ---------- Interfaz (protegida) ----------
+# ---------- Área operativa: cualquier usuario autenticado ----------
 @app.get("/", response_class=HTMLResponse)
-def dashboard(creds: HTTPBasicCredentials | None = Depends(_basic)):
-    if not admin.exists():
+def home(creds: HTTPBasicCredentials | None = Depends(_basic)):
+    if not users.exists_any():
         return RedirectResponse("/setup")
-    _check_basic(creds)
-    return ui.DASHBOARD
+    user = _authenticate(creds)
+    if not user:
+        raise HTTPException(status_code=401, detail="No autorizado",
+                            headers={"WWW-Authenticate": "Basic"})
+    return ui.home_page(store.list_printers(), is_admin=(user["rol"] == "admin"))
 
 
 @app.get("/pantalla/{name}", response_class=HTMLResponse)
-def pantalla(name: str, creds: HTTPBasicCredentials | None = Depends(_basic)):
-    if not admin.exists():
-        return RedirectResponse("/setup")
-    _check_basic(creds)
+def pantalla(name: str, _: dict = Depends(require_user)) -> str:
     store.ensure_printer(name)
     return ui.pantalla_page(name)
 
 
 @app.get("/api/state")
-def api_state(_: None = Depends(require_admin)) -> dict:
+def api_state(_: dict = Depends(require_user)) -> dict:
     return store.snapshot()
 
 
 @app.get("/api/state/{name}")
-def api_state_one(name: str, _: None = Depends(require_admin)) -> dict:
+def api_state_one(name: str, _: dict = Depends(require_user)) -> dict:
     return {"name": name, "history": store.get_history(name)}
 
 
+@app.post("/api/tickets/{name}/{ticket_id}/estado")
+def api_set_estado(name: str, ticket_id: str, payload: dict, _: dict = Depends(require_user)) -> dict:
+    estado = str((payload or {}).get("estado", ""))
+    try:
+        ok = store.set_estado(name, ticket_id, estado)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not ok:
+        raise HTTPException(status_code=404, detail="Ticket no encontrado")
+    return {"ok": True}
+
+
+# ---------- Configuración: solo admin ----------
+@app.get("/configuracion", response_class=HTMLResponse)
+def configuracion(_: dict = Depends(require_admin)) -> str:
+    return ui.CONFIGURACION_PAGE
+
+
 @app.post("/api/printers")
-def api_add_printer(payload: dict, _: None = Depends(require_admin)) -> dict:
+def api_add_printer(payload: dict, _: dict = Depends(require_admin)) -> dict:
     name = str((payload or {}).get("name", "")).strip()
     if not name:
         raise HTTPException(status_code=400, detail="Falta el nombre")
@@ -159,19 +186,19 @@ def api_add_printer(payload: dict, _: None = Depends(require_admin)) -> dict:
 
 
 @app.delete("/api/printers/{name}")
-def api_delete_printer(name: str, _: None = Depends(require_admin)) -> dict:
+def api_delete_printer(name: str, _: dict = Depends(require_admin)) -> dict:
     store.remove_printer(name)
     return {"printers": store.list_printers()}
 
 
 @app.post("/api/printers/{name}/clear")
-def api_clear_history(name: str, _: None = Depends(require_admin)) -> dict:
+def api_clear_history(name: str, _: dict = Depends(require_admin)) -> dict:
     store.clear_history(name)
     return {"ok": True}
 
 
 @app.post("/api/test")
-def api_test(payload: dict, _: None = Depends(require_admin)) -> dict:
+def api_test(payload: dict, _: dict = Depends(require_admin)) -> dict:
     name = str((payload or {}).get("printer", "")).strip()
     if not name:
         raise HTTPException(status_code=400, detail="Falta el nombre de la impresora")
@@ -200,14 +227,14 @@ def _sample_blocks(printer_name: str) -> list:
     ]
 
 
-# ---------- Clientes / tokens (protegido) ----------
+# ---------- Clientes / tokens: solo admin ----------
 @app.get("/api/clients")
-def api_list_clients(_: None = Depends(require_admin)) -> dict:
+def api_list_clients(_: dict = Depends(require_admin)) -> dict:
     return {"clients": clients.public()}
 
 
 @app.post("/api/clients")
-def api_save_client(payload: dict, _: None = Depends(require_admin)) -> dict:
+def api_save_client(payload: dict, _: dict = Depends(require_admin)) -> dict:
     try:
         clients.save(str((payload or {}).get("name", "")), str((payload or {}).get("token", "")))
     except ValueError as e:
@@ -216,9 +243,38 @@ def api_save_client(payload: dict, _: None = Depends(require_admin)) -> dict:
 
 
 @app.delete("/api/clients/{name}")
-def api_delete_client(name: str, _: None = Depends(require_admin)) -> dict:
+def api_delete_client(name: str, _: dict = Depends(require_admin)) -> dict:
     clients.delete(name)
     return {"clients": clients.public()}
+
+
+# ---------- Usuarios: solo admin ----------
+@app.get("/api/users")
+def api_list_users(_: dict = Depends(require_admin)) -> dict:
+    return {"users": users.list_users()}
+
+
+@app.post("/api/users")
+def api_create_user(payload: dict, _: dict = Depends(require_admin)) -> dict:
+    try:
+        u = users.create(
+            str((payload or {}).get("username", "")),
+            str((payload or {}).get("password", "")),
+            rol=str((payload or {}).get("rol", "estandar")),
+            nombre=str((payload or {}).get("nombre", "")),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"user": u}
+
+
+@app.delete("/api/users/{user_id}")
+def api_delete_user(user_id: str, _: dict = Depends(require_admin)) -> dict:
+    try:
+        users.delete(user_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"users": users.list_users()}
 
 
 @app.on_event("startup")

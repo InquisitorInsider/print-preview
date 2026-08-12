@@ -14,11 +14,14 @@ from __future__ import annotations
 import json
 import os
 import threading
+import uuid
 from datetime import datetime
 
 DATA_DIR = os.environ.get("DATA_DIR", "/app/data")
 _CONFIG_PATH = os.path.join(DATA_DIR, "printers.json")
 _MAX_HISTORY = 15
+
+ESTADOS = ("pendiente", "aceptado", "completado")
 
 _lock = threading.Lock()
 _printers: set[str] = set()
@@ -73,12 +76,25 @@ def record_ticket(name: str, blocks: list, copies: int, source: str) -> None:
     with _lock:
         hist = _history.setdefault(name, [])
         hist.insert(0, {
+            "id": uuid.uuid4().hex[:10],
             "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "blocks": blocks,
             "copies": copies,
             "source": source,
+            "estado": "pendiente",
         })
         del hist[_MAX_HISTORY:]
+
+
+def set_estado(name: str, ticket_id: str, estado: str) -> bool:
+    if estado not in ESTADOS:
+        raise ValueError("Estado inválido.")
+    with _lock:
+        for t in _history.get(name, []):
+            if t["id"] == ticket_id:
+                t["estado"] = estado
+                return True
+    return False
 
 
 def clear_history(name: str) -> None:
