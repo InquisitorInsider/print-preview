@@ -13,5 +13,3 @@ services:
       - "8120:8120"
     volumes:
       - ./data:/app/data
-    env_file:
-      - .env

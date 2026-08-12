@@ -15,11 +15,13 @@ esa URL al agente real.
 ## Uso
 
 ```bash
-cp .env.example .env   # define ADMIN_PASSWORD (ver "Seguridad" abajo)
 docker compose up -d --build
 ```
 
-Abre `http://<IP-de-esta-PC>:8120`:
+Abre `http://<IP-de-esta-PC>:8120` — la primera vez te lleva a `/setup`
+para crear tu propio usuario administrador (igual que horno-ruta80 /
+Ruta80G: se pide una sola vez, nadie te da una contraseña generada al
+azar).
 
 - **Tablero** (`/`) — da de alta impresoras virtuales (o se crean solas la
   primera vez que llega un trabajo con ese nombre) y muestra el último
@@ -36,11 +38,13 @@ nombre que le des acá (ej. "Barra", "Caja", "Brasa").
 
 ## Seguridad
 
-Dos capas de autenticación, igual que `print-agent`:
+Dos capas de autenticación:
 
 1. **Tablero, pantallas y API de administración** (`/`, `/pantalla/*`,
-   `/api/*`): HTTP Basic con `ADMIN_USER`/`ADMIN_PASSWORD` (`.env`, no se
-   sube a git). Si `ADMIN_PASSWORD` queda vacío, quedan sin protección.
+   `/api/*`): HTTP Basic contra el usuario/contraseña que creas en
+   `/setup` en el primer arranque (guardado con hash PBKDF2 en
+   `./data/admin.json`, mismo esquema que horno-ruta80/Ruta80G). Mientras
+   no exista ese usuario, todo redirige a `/setup`.
 2. **`POST /print`** (lo que usan los sistemas que imprimen): token por
    cliente. Se gestiona desde el tablero, sección "Clientes / tokens" (un
    nombre + token por cada sistema, header `Authorization: Bearer

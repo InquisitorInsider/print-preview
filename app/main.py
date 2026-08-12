@@ -11,42 +11,43 @@ agente real, sin cambiar una sola línea de código de negocio — pasar de
 En vez de imprimir, cada trabajo se guarda y se muestra en el tablero (/)
 o en la pantalla dedicada de esa impresora (/pantalla/<nombre>), tipo KDS.
 
-Dos capas de autenticación, igual que print-agent:
-1) Admin (tablero, pantallas, API de administración): HTTP Basic con
-   ADMIN_USER/ADMIN_PASSWORD. Si ADMIN_PASSWORD está vacía, no hay
-   protección.
+Dos capas de autenticación:
+1) Admin (tablero, pantallas, API de administración): HTTP Basic contra un
+   usuario/contraseña que TÚ eliges en el primer arranque (ver /setup) —
+   mismo patrón de "primer arranque crea el admin" que horno-ruta80 /
+   Ruta80G, no una contraseña generada al azar.
 2) Clientes de impresión (POST /print): Bearer token. Si no hay clientes
    configurados, el endpoint queda abierto en la red local.
 """
 from __future__ import annotations
 
-import secrets
 import uuid
 from datetime import datetime
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 
-from . import clients, config, store, ui
+from . import admin, clients, store, ui
 
-app = FastAPI(title="print-screen", version="1.1.0", docs_url="/docs")
+app = FastAPI(title="print-screen", version="1.2.0", docs_url="/docs")
 _basic = HTTPBasic(auto_error=False)
 
 
-def require_admin(creds: HTTPBasicCredentials | None = Depends(_basic)) -> None:
-    if not config.ADMIN_PASSWORD:
-        return
-    ok = (
-        creds is not None
-        and secrets.compare_digest(creds.username, config.ADMIN_USER)
-        and secrets.compare_digest(creds.password, config.ADMIN_PASSWORD)
-    )
+def _check_basic(creds: HTTPBasicCredentials | None) -> None:
+    ok = creds is not None and admin.verify(creds.username, creds.password)
     if not ok:
         raise HTTPException(status_code=401, detail="No autorizado",
                             headers={"WWW-Authenticate": "Basic"})
+
+
+def require_admin(creds: HTTPBasicCredentials | None = Depends(_basic)) -> None:
+    if not admin.exists():
+        raise HTTPException(status_code=401,
+                            detail="Todavía no hay administrador configurado — entra a /setup")
+    _check_basic(creds)
 
 
 class PrintJob(BaseModel):
@@ -101,14 +102,39 @@ def health() -> dict:
     return {"status": "ok", "printers": store.list_printers()}
 
 
+# ---------- Primer arranque: crear administrador ----------
+@app.get("/setup", response_class=HTMLResponse)
+def setup_page():
+    if admin.exists():
+        return RedirectResponse("/")
+    return ui.SETUP_PAGE
+
+
+@app.post("/api/setup")
+def api_setup(payload: dict) -> dict:
+    if admin.exists():
+        raise HTTPException(status_code=409, detail="Ya existe un administrador.")
+    try:
+        admin.create(str((payload or {}).get("username", "")), str((payload or {}).get("password", "")))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True}
+
+
 # ---------- Interfaz (protegida) ----------
 @app.get("/", response_class=HTMLResponse)
-def dashboard(_: None = Depends(require_admin)) -> str:
+def dashboard(creds: HTTPBasicCredentials | None = Depends(_basic)):
+    if not admin.exists():
+        return RedirectResponse("/setup")
+    _check_basic(creds)
     return ui.DASHBOARD
 
 
 @app.get("/pantalla/{name}", response_class=HTMLResponse)
-def pantalla(name: str, _: None = Depends(require_admin)) -> str:
+def pantalla(name: str, creds: HTTPBasicCredentials | None = Depends(_basic)):
+    if not admin.exists():
+        return RedirectResponse("/setup")
+    _check_basic(creds)
     store.ensure_printer(name)
     return ui.pantalla_page(name)
 

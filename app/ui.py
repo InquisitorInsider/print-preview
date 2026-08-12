@@ -79,6 +79,46 @@ function renderBlocks(blocks){
 }
 """
 
+SETUP_PAGE = f"""<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Configurar administrador — print-screen</title>
+<style>
+{_TICKET_CSS}
+  .setup{{max-width:380px;margin:60px auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:24px}}
+  .setup h1{{font-size:1.1rem;margin:0 0 6px}}
+  .setup p{{color:var(--muted);font-size:.85rem;margin:0 0 18px}}
+  .setup label{{display:block;font-size:.82rem;margin:10px 0 4px}}
+  .setup input{{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:.9rem}}
+  .setup button{{width:100%;margin-top:18px;padding:10px;border:none;border-radius:8px;background:var(--accent);color:#fff;font-size:.9rem;cursor:pointer}}
+  .setup .err{{color:var(--err);font-size:.82rem;margin-top:10px;display:none}}
+</style>
+</head><body>
+<div class="setup">
+  <h1>🖨️ print-screen — primer arranque</h1>
+  <p>Crea el usuario administrador del tablero. Se pide una sola vez.</p>
+  <label>Usuario</label><input id="su" value="admin">
+  <label>Contraseña</label><input id="sp" type="password">
+  <label>Confirmar contraseña</label><input id="sp2" type="password">
+  <div class="err" id="serr"></div>
+  <button onclick="doSetup()">Crear administrador</button>
+</div>
+<script>
+async function doSetup(){{
+  const u = document.getElementById('su').value.trim();
+  const p = document.getElementById('sp').value;
+  const p2 = document.getElementById('sp2').value;
+  const err = document.getElementById('serr');
+  err.style.display = 'none';
+  if(p !== p2){{ err.textContent = 'Las contraseñas no coinciden.'; err.style.display = 'block'; return; }}
+  const r = await fetch('/api/setup', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify({{username:u, password:p}})}});
+  if(!r.ok){{ const e = await r.json().catch(()=>({{}})); err.textContent = e.detail || 'Error'; err.style.display = 'block'; return; }}
+  location.href = '/';
+}}
+document.getElementById('sp2').addEventListener('keydown', e=>{{ if(e.key==='Enter') doSetup(); }});
+</script>
+</body></html>"""
+
 DASHBOARD = f"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
