@@ -23,12 +23,15 @@ Tres capas de autenticación:
 """
 from __future__ import annotations
 
+import io
 import uuid
 from datetime import datetime
 from typing import Any
 
+import qrcode
+import qrcode.image.svg
 from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 
@@ -108,6 +111,20 @@ def list_printer_names() -> dict:
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "printers": store.list_printers()}
+
+
+@app.get("/_qr.svg")
+def qr_svg(data: str) -> Response:
+    """Genera un QR real (SVG) a partir de los datos crudos de un bloque
+    tipo "qr" — antes la pantalla solo mostraba el texto plano del dato
+    (nunca un código escaneable), pedido explícito del usuario para poder
+    ver realmente cómo sale un comprobante de prueba. Público (sin auth):
+    mismo criterio que /printers y /health, no expone nada sensible que la
+    propia pantalla del ticket no muestre ya."""
+    img = qrcode.make(data, image_factory=qrcode.image.svg.SvgPathImage)
+    buf = io.BytesIO()
+    img.save(buf)
+    return Response(content=buf.getvalue(), media_type="image/svg+xml")
 
 
 # ---------- Primer arranque: crear el primer usuario (admin) ----------
