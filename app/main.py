@@ -102,6 +102,35 @@ def print_endpoint(job: PrintJob, authorization: str | None = Header(default=Non
     return {"accepted": True, "job_id": job_id, "printer": printer_name, "source": source}
 
 
+class PrintImageJob(BaseModel):
+    printer: str | None = None
+    copies: int | None = 1
+    image_base64: str
+    source: str | None = None
+    model_config = {"extra": "ignore"}
+
+
+@app.post("/print-image", status_code=202)
+def print_image_endpoint(job: PrintImageJob, authorization: str | None = Header(default=None)) -> dict:
+    """Mismo contrato que /print-image del print-agent (26 sep 2026): una
+    imagen PNG/JPG en base64 (cupón con logo, ticket del sorteo). Aquí se
+    guarda como un bloque "image" para verla en pantalla (11 nov 2026: los
+    tickets del sorteo no se podían ver en el servidor de prueba)."""
+    import base64
+    try:
+        datos = base64.b64decode(job.image_base64, validate=True)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="image_base64 no válido")
+    if len(datos) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Imagen demasiado grande")
+    tipo = "image/jpeg" if datos[:2] == b"\xff\xd8" else "image/png"
+    source = _resolve_source(authorization, job.source)
+    printer_name = (job.printer or "").strip() or "(por defecto)"
+    store.record_ticket(printer_name, [{"type": "image", "mime": tipo, "data": job.image_base64}], job.copies or 1, source)
+    job_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+    return {"accepted": True, "job_id": job_id, "printer": printer_name, "source": source}
+
+
 @app.get("/printers")
 def list_printer_names() -> dict:
     names = store.list_printers()
