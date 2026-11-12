@@ -77,7 +77,7 @@ function renderBlocks(blocks){
       html += `<div class="tk-qr"><img src="/_qr.svg?data=${encodeURIComponent(b.data)}" alt="QR" style="width:${(b.size||5)*24}px;height:${(b.size||5)*24}px"></div>`;
     } else if(t==='image'){
       const mime = /^image\/(png|jpeg)$/.test(b.mime||'') ? b.mime : 'image/png';
-      const data = String(b.data||'').replace(/[^A-Za-z0-9+/=]/g,'');
+      const data = String(b.data||b.base64||'').replace(/[^A-Za-z0-9+/=]/g,'');
       html += `<div class="tk-qr"><img src="data:${mime};base64,${data}" alt="imagen" style="max-width:100%;display:block;margin:0 auto"></div>`;
     } else if(t==='barcode'){
       html += `<div class="tk-barcode">▮▮▮ ${esc(b.symbology||'')}<br>${esc(b.data)}</div>`;
